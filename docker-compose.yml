@@ -1,0 +1,70 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15
+    container_name: amco-db
+    environment:
+      POSTGRES_USER: amco_user
+      POSTGRES_PASSWORD: amco_password
+      POSTGRES_DB: amco_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - amco-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: amco-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - amco-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: amco-backend
+    environment:
+      DATABASE_URL: postgresql://amco_user:amco_password@db:5432/amco_db
+      REDIS_URL: redis://redis:6379
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    networks:
+      - amco-network
+    command: uvicorn api:app --host 0.0.0.0 --port 8000
+
+  # Streamlit Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: amco-dashboard
+    environment:
+      STREAMLIT_SERVER_PORT: 8501
+      API_URL: http://backend:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    networks:
+      - amco-network
+    command: streamlit run dashboard_avanzado.py --server.port 8501
+
+volumes:
+  postgres_data:
+
+networks:
+  amco-network:
+    driver: bridge

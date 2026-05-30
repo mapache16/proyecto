@@ -1,0 +1,471 @@
+from database import Base, engine, SessionLocal
+from models import (
+    VehiculoDB,
+    ConductorDB,
+    RutaDB,
+    ParadaDB,
+    RutaParadaDB,
+    UsuarioDB,
+    HistorialViajesDB,
+    TelemetriaBusDB
+)
+from utils import (
+    calcular_distancia_ruta,
+    calcular_tiempo_estimado,
+    calcular_demanda_promedio,
+    path_json_a_lista
+)
+from route_optimizer import AsignadorRutasInteligente
+
+import random
+import json
+from datetime import datetime, timedelta
+
+print("🧹 Reiniciando base de datos...")
+
+Base.metadata.drop_all(bind=engine)
+Base.metadata.create_all(bind=engine)
+
+db = SessionLocal()
+
+# =========================
+# PARADAS
+# =========================
+
+PARADAS = [
+    ("Cuba",4.7915,-75.7310),
+    ("Centro",4.8135,-75.6942),
+    ("UTP",4.7945,-75.6885),
+    ("Dosquebradas",4.8174,-75.6898),
+    ("Santa Rosa",4.8707,-75.6231),
+
+    ("Villa Santana",4.8070,-75.6710),
+    ("El Jardín",4.8030,-75.7020),
+    ("Terminal",4.8150,-75.7000),
+    ("Boston",4.8080,-75.6900),
+    ("Samaria",4.8210,-75.6750),
+
+    ("Frailes",4.8400,-75.6700),
+    ("La Badea",4.8290,-75.6820),
+    ("Viaducto",4.8140,-75.6880),
+    ("La Virginia",4.8990,-75.8830),
+    ("Marsella",4.9370,-75.7370),
+
+    ("Apía",5.1060,-75.9430),
+    ("Santuario",5.0800,-75.9650),
+    ("Belén",5.2000,-75.8670),
+    ("Mistrató",5.2960,-75.8830),
+    ("Pueblo Rico",5.2240,-76.0360)
+]
+
+paradas_db = []
+parada_map = {}  # ID -> Parada para buscar rápido
+
+for nombre, lat, lon in PARADAS:
+
+    parada = ParadaDB(
+        nombre=nombre,
+        latitud=lat,
+        longitud=lon,
+        personas_esperando=random.randint(20,250)
+    )
+
+    db.add(parada)
+    paradas_db.append(parada)
+
+db.commit()
+
+# Mapear IDs
+for parada in paradas_db:
+    parada_map[parada.nombre] = parada.id
+
+print("✅ 20 paradas creadas")
+
+# =========================
+# RUTAS METROPOLITANAS REALES
+# =========================
+
+RUTAS_REALES = [
+
+    {
+        "nombre": "Cuba - Centro",
+        "codigo": "R-01",
+        "path": [
+            [-75.7310,4.7915],  # Cuba
+            [-75.7200,4.8000],
+            [-75.7050,4.8070],
+            [-75.6942,4.8135]   # Centro
+        ],
+        "paradas": ["Cuba", "Centro"]
+    },
+
+    {
+        "nombre": "Centro - Dosquebradas",
+        "codigo": "R-02",
+        "path": [
+            [-75.6942,4.8135],
+            [-75.6910,4.8140],
+            [-75.6898,4.8174]
+        ],
+        "paradas": ["Centro", "Dosquebradas"]
+    },
+
+    {
+        "nombre": "Centro - UTP",
+        "codigo": "R-03",
+        "path": [
+            [-75.6942,4.8135],
+            [-75.6920,4.8070],
+            [-75.6885,4.7945]
+        ],
+        "paradas": ["Centro", "UTP"]
+    },
+
+    {
+        "nombre": "Centro - Santa Rosa",
+        "codigo": "R-04",
+        "path": [
+            [-75.6942,4.8135],
+            [-75.6700,4.8300],
+            [-75.6500,4.8500],
+            [-75.6231,4.8707]
+        ],
+        "paradas": ["Centro", "Villa Santana", "Santa Rosa"]
+    },
+
+    {
+        "nombre": "Dosquebradas - Frailes",
+        "codigo": "R-05",
+        "path": [
+            [-75.6898,4.8174],
+            [-75.6800,4.8260],
+            [-75.6700,4.8400]
+        ],
+        "paradas": ["Dosquebradas", "Samaria", "Frailes"]
+    },
+
+    {
+        "nombre": "Centro - Villa Santana",
+        "codigo": "R-06",
+        "path": [
+            [-75.6942,4.8135],
+            [-75.6840,4.8120],
+            [-75.6710,4.8070]
+        ],
+        "paradas": ["Centro", "Villa Santana"]
+    },
+
+    {
+        "nombre": "Centro - La Virginia",
+        "codigo": "R-07",
+        "path": [
+            [-75.6942,4.8135],
+            [-75.7600,4.8400],
+            [-75.8200,4.8700],
+            [-75.8830,4.8990]
+        ],
+        "paradas": ["Centro", "La Virginia"]
+    },
+
+    {
+        "nombre": "Centro - Marsella",
+        "codigo": "R-08",
+        "path": [
+            [-75.6942,4.8135],
+            [-75.7100,4.8600],
+            [-75.7250,4.9000],
+            [-75.7370,4.9370]
+        ],
+        "paradas": ["Centro", "Marsella"]
+    },
+
+    {
+        "nombre": "Santa Rosa - Apía",
+        "codigo": "R-09",
+        "path": [
+            [-75.6231,4.8707],
+            [-75.7600,4.9500],
+            [-75.8500,5.0200],
+            [-75.9430,5.1060]
+        ],
+        "paradas": ["Santa Rosa", "Apía"]
+    },
+
+    {
+        "nombre": "Apía - Santuario",
+        "codigo": "R-10",
+        "path": [
+            [-75.9430,5.1060],
+            [-75.9550,5.0950],
+            [-75.9650,5.0800]
+        ],
+        "paradas": ["Apía", "Santuario"]
+    },
+
+    {
+        "nombre": "Santuario - Belén",
+        "codigo": "R-11",
+        "path": [
+            [-75.9650,5.0800],
+            [-75.9200,5.1300],
+            [-75.8670,5.2000]
+        ],
+        "paradas": ["Santuario", "Belén"]
+    },
+
+    {
+        "nombre": "Belén - Mistrató",
+        "codigo": "R-12",
+        "path": [
+            [-75.8670,5.2000],
+            [-75.8750,5.2500],
+            [-75.8830,5.2960]
+        ],
+        "paradas": ["Belén", "Mistrató"]
+    },
+
+    {
+        "nombre": "Mistrató - Pueblo Rico",
+        "codigo": "R-13",
+        "path": [
+            [-75.8830,5.2960],
+            [-75.9500,5.2700],
+            [-76.0360,5.2240]
+        ],
+        "paradas": ["Mistrató", "Pueblo Rico"]
+    },
+
+    {
+        "nombre": "Anillo Metropolitano",
+        "codigo": "R-14",
+        "path": [
+            [-75.7310,4.7915],
+            [-75.6942,4.8135],
+            [-75.6898,4.8174],
+            [-75.6231,4.8707],
+            [-75.6942,4.8135]
+        ],
+        "paradas": ["Cuba", "Centro", "Dosquebradas", "Santa Rosa"]
+    }
+]
+
+rutas_creadas = []
+
+for ruta_data in RUTAS_REALES:
+
+    # FASE 1: Calcular distancia
+    path = ruta_data["path"]
+    distancia_km = calcular_distancia_ruta(path)
+    
+    # FASE 1: Calcular tiempo estimado
+    tiempo_estimado_min = calcular_tiempo_estimado(distancia_km)
+    
+    # FASE 1: Calcular demanda promedio
+    paradas_nombres = ruta_data["paradas"]
+    personas_en_paradas = []
+    for nombre_parada in paradas_nombres:
+        parada_obj = db.query(ParadaDB).filter_by(nombre=nombre_parada).first()
+        if parada_obj:
+            personas_en_paradas.append(parada_obj.personas_esperando)
+    
+    demanda_promedio = calcular_demanda_promedio(personas_en_paradas)
+
+    ruta = RutaDB(
+        nombre=ruta_data["nombre"],
+        codigo_ruta=ruta_data["codigo"],
+        tarifa_base=random.randint(3000,7000),
+        geometria_ruta=json.dumps(ruta_data["path"]),
+        distancia_km=distancia_km,
+        tiempo_estimado_min=tiempo_estimado_min,
+        demanda_promedio=demanda_promedio
+    )
+
+    db.add(ruta)
+    db.flush()  # Para obtener el ID antes de hacer commit
+    rutas_creadas.append((ruta, ruta_data["paradas"]))
+
+db.commit()
+
+print("✅ 14 rutas metropolitanas creadas")
+print("   📍 Distancia, tiempo estimado y demanda calculados automáticamente")
+
+# =========================
+# FASE 1: POBLAR RUTA_PARADAS
+# =========================
+
+for ruta, paradas_nombres in rutas_creadas:
+    for orden, nombre_parada in enumerate(paradas_nombres):
+        parada_obj = db.query(ParadaDB).filter_by(nombre=nombre_parada).first()
+        if parada_obj:
+            ruta_parada = RutaParadaDB(
+                ruta_id=ruta.id,
+                parada_id=parada_obj.id,
+                orden_secuencia=orden
+            )
+            db.add(ruta_parada)
+
+db.commit()
+
+print("✅ RutaParadaDB poblada - Secuencias de paradas creadas")
+
+# =========================
+# VEHÍCULOS
+# =========================
+
+for i in range(1,201):
+
+    vehiculo = VehiculoDB(
+        id=i,
+        placa=f"RIS-{i:03d}",
+        capacidad=random.choice([40,60,80]),
+        tipo_motor="Electrico" if i <= 100 else "Gasolina",
+        estado_mecanico="Optimo"
+    )
+
+    db.add(vehiculo)
+
+db.commit()
+
+print("✅ 200 buses creados")
+
+# =========================
+# ASIGNACIÓN INTELIGENTE DE RUTAS
+# =========================
+
+print("\n🔄 Asignando rutas de forma inteligente...")
+
+asignador = AsignadorRutasInteligente()
+asignaciones = asignador.asignar_todas_las_rutas()
+
+print(f"✅ {len(asignaciones)} buses asignados a rutas")
+
+# Mostrar estadísticas
+stats = asignador.estadisticas_asignacion()
+print(f"\n📊 Estadísticas de asignación:")
+print(f"   - Total buses: {stats['total_buses']}")
+print(f"   - Buses asignados: {stats['buses_asignados']}")
+print(f"   - Promedio buses/ruta: {stats['promedio_buses_por_ruta']}")
+
+# =========================
+# CONDUCTORES
+# =========================
+
+for i in range(1,201):
+
+    conductor = ConductorDB(
+        id=f"C{i:03d}",
+        nombre=f"Conductor {i}",
+        licencia=f"LIC-{1000+i}",
+        experiencia_anos=random.randint(1,20),
+        vehiculo_actual_id=i
+    )
+
+    db.add(conductor)
+
+db.commit()
+
+print("✅ 200 conductores creados")
+
+# =========================
+# USUARIOS
+# =========================
+
+nombres = [
+    "Juan","Sara","Pedro","Maria","Luis",
+    "Ana","Camila","Diego","Andres","Paula"
+]
+
+apellidos = [
+    "Gomez","Restrepo","Perez","Lopez",
+    "Marin","Ospina","Jaramillo"
+]
+
+for i in range(1,501):
+
+    usuario = UsuarioDB(
+        id=f"U{i:04d}",
+        nombre=f"{random.choice(nombres)} {random.choice(apellidos)} {i}",
+        saldo_billetera=random.randint(0,50000),
+        deuda=random.randint(0,120000) if random.random() > 0.7 else 0,
+        tipo_usuario="Regular"
+    )
+
+    db.add(usuario)
+
+db.commit()
+
+print("✅ 500 usuarios creados")
+
+# =========================
+# TELEMETRÍA INICIAL
+# =========================
+
+for i in range(1,201):
+
+    parada = random.choice(PARADAS)
+
+    telemetria = TelemetriaBusDB(
+        vehiculo_id=i,
+        latitud=parada[1],
+        longitud=parada[2],
+        velocidad_kmh=random.uniform(10,60),
+        nivel_energia=random.uniform(30,100),
+        pasajeros_a_bordo=random.randint(0,70),
+        estado_salud="VERDE"
+    )
+
+    db.add(telemetria)
+
+db.commit()
+
+print("✅ Telemetría inicial creada")
+
+# =========================
+# HISTORIAL
+# =========================
+
+fecha_base = datetime.now()
+
+for i in range(10000):
+
+    viaje = HistorialViajesDB(
+        usuario_id=f"U{random.randint(1,500):04d}",
+        ruta_id=random.randint(1,14),
+        vehiculo_id=random.randint(1,200),
+        fecha=fecha_base - timedelta(
+            days=random.randint(0,60),
+            hours=random.randint(0,23),
+            minutes=random.randint(0,59)
+        ),
+        costo_aplicado=random.randint(3000,7000),
+        metodo_pago="Tarjeta_NFC"
+    )
+
+    db.add(viaje)
+
+    if i % 500 == 0:
+        db.commit()
+
+db.commit()
+
+print("✅ 10.000 viajes históricos creados")
+
+db.close()
+
+print("\n" + "="*60)
+print("🚀 SISTEMA COMPLETO - LISTO PARA DEMOSTRACIÓN")
+print("="*60)
+print("✅ FASE 1: Cálculos automáticos")
+print("   - distancia_km calculada")
+print("   - tiempo_estimado_min calculada") 
+print("   - demanda_promedio calculada")
+print("   - RutaParadaDB poblada\n")
+print("✅ FASE 2: Grafo y Algoritmo Dijkstra")
+print("   - Matriz de adyacencia creada")
+print("   - Matriz ponderada con distancias")
+print("   - Dijkstra implementado\n")
+print("✅ ASIGNACIÓN INTELIGENTE")
+print("   - Rutas asignadas por demanda")
+print("   - Considerando tipo de motor")
+print("   - Balanceando capacidad")
+print("="*60)

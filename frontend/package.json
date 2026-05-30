@@ -1,0 +1,22 @@
+{
+  "name": "amco-frontend",
+  "version": "2.0.0",
+  "description": "Frontend para AMCO - Centro Inteligente Metropolitano",
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "leaflet": "^1.9.4",
+    "plotly.js": "^2.26.0",
+    "axios": "^1.6.0",
+    "date-fns": "^2.30.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "vite": "^4.4.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}
